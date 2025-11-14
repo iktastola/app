@@ -1,10 +1,10 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Trash2 } from "lucide-react";
+import { Trash2, Edit } from "lucide-react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 
-export default function UsersTable({ users, onDelete }) {
+export default function UsersTable({ users, onDelete, onEdit }) {
   const getRoleBadgeColor = (role) => {
     switch(role) {
       case 'admin': return 'bg-purple-100 text-purple-800';
@@ -47,15 +47,26 @@ export default function UsersTable({ users, onDelete }) {
               </TableCell>
               <TableCell>{format(new Date(user.created_at), 'dd MMM yyyy', { locale: es })}</TableCell>
               <TableCell className="text-right">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onDelete(user.id)}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                  data-testid={`delete-user-${user.id}`}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onEdit(user)}
+                    className="text-[#278D33] hover:text-[#1f6b28] hover:bg-[#278D33]/10"
+                    data-testid={`edit-user-${user.id}`}
+                  >
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onDelete(user.id)}
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    data-testid={`delete-user-${user.id}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
               </TableCell>
             </TableRow>
           ))}

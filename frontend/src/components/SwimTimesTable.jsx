@@ -1,10 +1,10 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Trash2 } from "lucide-react";
+import { Trash2, Edit } from "lucide-react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 
-export default function SwimTimesTable({ times, swimmers = [], onDelete, showActions = false }) {
+export default function SwimTimesTable({ times, swimmers = [], onDelete, onEdit, showActions = false }) {
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = (seconds % 60).toFixed(2);
@@ -55,15 +55,26 @@ export default function SwimTimesTable({ times, swimmers = [], onDelete, showAct
               <TableCell className="text-gray-600">{time.competition || '-'}</TableCell>
               {showActions && (
                 <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onDelete(time.id)}
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                    data-testid={`delete-time-${time.id}`}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onEdit(time)}
+                      className="text-[#278D33] hover:text-[#1f6b28] hover:bg-[#278D33]/10"
+                      data-testid={`edit-time-${time.id}`}
+                    >
+                      <Edit className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onDelete(time.id)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      data-testid={`delete-time-${time.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </TableCell>
               )}
             </TableRow>
