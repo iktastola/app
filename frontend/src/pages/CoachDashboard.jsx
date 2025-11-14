@@ -7,6 +7,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import SwimTimesTable from "@/components/SwimTimesTable";
 import AddTimeDialog from "@/components/AddTimeDialog";
+import EditTimeDialog from "@/components/EditTimeDialog";
 import SwimmerSelector from "@/components/SwimmerSelector";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -17,6 +18,8 @@ export default function CoachDashboard({ user, onLogout }) {
   const [swimmers, setSwimmers] = useState([]);
   const [selectedSwimmer, setSelectedSwimmer] = useState(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editingTime, setEditingTime] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -90,6 +93,29 @@ export default function CoachDashboard({ user, onLogout }) {
     }
   };
 
+  const handleEditTime = (time) => {
+    setEditingTime(time);
+    setShowEditDialog(true);
+  };
+
+  const handleUpdateTime = async (timeData) => {
+    try {
+      const token = localStorage.getItem('token');
+      const headers = { Authorization: `Bearer ${token}` };
+      await axios.put(`${API}/times/${editingTime.id}`, timeData, { headers });
+      toast.success("Tiempo actualizado correctamente");
+      setShowEditDialog(false);
+      setEditingTime(null);
+      if (selectedSwimmer) {
+        fetchTimesForSwimmer(selectedSwimmer);
+      } else {
+        fetchAllTimes();
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Error al actualizar tiempo");
+    }
+  };
+
   const handleDeleteTime = async (timeId) => {
     try {
       const token = localStorage.getItem('token');
@@ -160,6 +186,7 @@ export default function CoachDashboard({ user, onLogout }) {
                 times={times} 
                 swimmers={swimmers}
                 onDelete={handleDeleteTime}
+                onEdit={handleEditTime}
                 showActions
               />
             )}
@@ -171,6 +198,14 @@ export default function CoachDashboard({ user, onLogout }) {
         open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onSubmit={handleAddTime}
+        swimmers={swimmers}
+      />
+
+      <EditTimeDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        onSubmit={handleUpdateTime}
+        time={editingTime}
         swimmers={swimmers}
       />
     </div>
