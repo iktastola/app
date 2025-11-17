@@ -253,19 +253,35 @@ async def delete_user(user_id: str, current_user: User = Depends(get_current_use
 
 @api_router.post("/times", response_model=SwimTime)
 async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depends(get_current_user)):
-    # Only coaches and admins can record times
     if current_user.role not in ["coach", "admin"]:
         raise HTTPException(status_code=403, detail="Solo entrenadores y administradores pueden registrar tiempos")
     
-    time_obj = SwimTime(**time_data.model_dump(), recorded_by=current_user.id)
+    # Calcular pace por 100 metros
+    pace_100m = time_data.time_seconds / (time_data.distance / 100)
+
+    # Crear objeto con recorded_by añadido
+    time_obj = SwimTime(
+        **time_data.model_dump(),
+        recorded_by=current_user.id,
+        pace_100m=pace_100m
+    )
+
+    # Guardar en MongoDB
     doc = time_obj.model_dump()
     doc['date'] = doc['date'].isoformat()
     doc['created_at'] = doc['created_at'].isoformat()
-    
+
     await db.swim_times.insert_one(doc)
     
-    # Update personal best if needed
-    await update_personal_best(time_obj.swimmer_id, time_obj.distance, time_obj.style, time_obj.time_seconds, time_obj.date, time_obj.competition)
+    # Actualizar mejor marca
+    await update_personal_best(
+        time_obj.swimmer_id, 
+        time_obj.distance, 
+        time_obj.style, 
+        time_obj.time_seconds, 
+        time_obj.date, 
+        time_obj.competition
+    )
     
     return time_obj
 
