@@ -62,6 +62,7 @@ class SwimTimeBase(BaseModel):
     distance: int  # 50, 100, 200, 400, 800, 1500
     style: str  # Libre, Espalda, Braza, Mariposa
     time_seconds: float
+    pace_100m: float                 # ← NUEVO
     date: datetime
     competition: Optional[str] = None
     #recorded_by: str  # coach or admin id
