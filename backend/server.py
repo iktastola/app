@@ -64,7 +64,7 @@ class SwimTimeBase(BaseModel):
     time_seconds: float
     date: datetime
     competition: Optional[str] = None
-    recorded_by: str  # coach or admin id
+    #recorded_by: str  # coach or admin id
 
 class SwimTimeCreate(SwimTimeBase):
     pass
