@@ -60,7 +60,6 @@ class LoginResponse(BaseModel):
     token: str
     user: User
 
-
 class SwimTimeBase(BaseModel):
     swimmer_id: str
     distance: int
@@ -69,12 +68,14 @@ class SwimTimeBase(BaseModel):
     date: datetime
     competition: Optional[str] = None
 
+
 class SwimTimeCreate(SwimTimeBase):
     pass
 
+
 class SwimTime(SwimTimeBase):
-    pace_100m: float
-    recorded_by: str
+    pace_100m: float = 0.0            # Por si faltara en Mongo
+    recorded_by: Optional[str] = None # <--- CAMBIO IMPORTANTE
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
