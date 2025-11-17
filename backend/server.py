@@ -68,19 +68,15 @@ class SwimTimeBase(BaseModel):
     time_seconds: float
     date: datetime
     competition: Optional[str] = None
-    pace_100m: Optional[float] = None   # Calculado en backend
-
 
 class SwimTimeCreate(SwimTimeBase):
     pass
 
-
 class SwimTime(SwimTimeBase):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     pace_100m: float
     recorded_by: str
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class LockerBase(BaseModel):
@@ -191,24 +187,27 @@ async def register(user_data: UserCreate, current_user: User = Depends(get_curre
 
 @api_router.post("/times", response_model=SwimTime)
 async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depends(get_current_user)):
-
     if current_user.role not in ["coach", "admin"]:
         raise HTTPException(status_code=403, detail="Solo entrenadores y administradores pueden registrar tiempos")
 
+    # Calcular pace por 100 metros
     pace_100m = time_data.time_seconds / (time_data.distance / 100)
 
+    # Crear SwimTime completo
     time_obj = SwimTime(
         **time_data.model_dump(),
         pace_100m=pace_100m,
         recorded_by=current_user.id
     )
 
+    # Guardar en Mongo
     doc = time_obj.model_dump()
     doc["date"] = doc["date"].isoformat()
     doc["created_at"] = doc["created_at"].isoformat()
 
     await db.swim_times.insert_one(doc)
 
+    # Actualizar PB
     await update_personal_best(
         time_obj.swimmer_id,
         time_obj.distance,
@@ -219,7 +218,6 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
     )
 
     return time_obj
-
 
 @api_router.get("/times", response_model=List[SwimTime])
 async def get_swim_times(swimmer_id: Optional[str] = None, current_user: User = Depends(get_current_user)):
