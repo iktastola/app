@@ -42,6 +42,7 @@ class UserBase(BaseModel):
     email: EmailStr
     name: str
     role: str  # swimmer, coach, admin
+    birth_date: Optional[datetime] = None  # Campo opcional para la fecha de nacimiento
 
 
 class UserCreate(UserBase):
@@ -52,6 +53,7 @@ class User(UserBase):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    birth_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))  # Se añade birth_date
 
 
 class LoginRequest(BaseModel):
@@ -187,6 +189,10 @@ async def register(user_data: UserCreate, current_user: User = Depends(get_curre
     user_dict = user_data.model_dump()
     hashed_pw = hash_password(user_dict.pop("password"))
 
+    # Asignar la fecha de nacimiento si no se recibe
+    if "birth_date" not in user_dict:
+        user_dict["birth_date"] = datetime.now(timezone.utc)  # Se asigna la fecha actual si no se pasa
+
     user_obj = User(**user_dict)
     doc = user_obj.model_dump()
     doc["password"] = hashed_pw
@@ -206,6 +212,8 @@ async def get_users(current_user: User = Depends(get_current_user)):
     for user in users:
         if isinstance(user.get("created_at"), str):
             user["created_at"] = datetime.fromisoformat(user["created_at"])
+        if isinstance(user.get("birth_date"), str):
+            user["birth_date"] = datetime.fromisoformat(user["birth_date"])
     return users
 
 
@@ -220,6 +228,9 @@ async def get_user(user_id: str, current_user: User = Depends(get_current_user))
 
     if isinstance(user_doc.get("created_at"), str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
+
+    if isinstance(user_doc.get("birth_date"), str):
+        user_doc["birth_date"] = datetime.fromisoformat(user_doc["birth_date"])
 
     return User(**user_doc)
 
@@ -245,6 +256,13 @@ async def update_user(user_id: str, user_data: UserBase, current_user: User = De
         "email": user_data.email,
         "role": user_data.role,
     }
+
+    # Verificar si se ha recibido un campo birth_date
+    if "birth_date" in user_data.dict():
+        update_doc["birth_date"] = user_data.birth_date
+    else:
+        # Si no se pasa birth_date, asignar el valor actual
+        update_doc["birth_date"] = existing_user["birth_date"] if "birth_date" in existing_user else datetime.now(timezone.utc)
 
     result = await db.users.update_one({"id": user_id}, {"$set": update_doc})
     if result.matched_count == 0:
