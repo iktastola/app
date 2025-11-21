@@ -119,6 +119,43 @@ class PersonalBest(BaseModel):
 
 # ================== HELPERS AUTH ==================
 
+def get_category_and_gender(birth_date: datetime, gender: Optional[str] = "fem") -> str:
+    """Calcula la categoría y género del nadador."""
+    categorias = {
+        2014: 'alevin_1',
+        2013: 'alevin_2',
+        2012: 'infantil_1',
+        2011: 'infantil_2',
+        2010: 'Junior_1',
+        2009: 'Junior_2',
+        2008: 'Junior_3',
+        2007: 'abs_jov',
+        2006: 'abs_jov',
+    }
+
+    # Obtener el año de nacimiento
+    anio_nacimiento = fecha_nacimiento.year
+
+    # Determinar la temporada actual (a partir del 1 de septiembre de cada año)
+    hoy = datetime.now()
+    temporada_inicio = datetime(hoy.year, 9, 1)  # Temporada siempre comienza el 1 de septiembre
+    if hoy < temporada_inicio:  # Si hoy es antes del 1 de septiembre, estamos en la temporada anterior
+        temporada_actual = hoy.year - 1
+    else:  # Si estamos después del 1 de septiembre, es la temporada actual
+        temporada_actual = hoy.year
+
+    # Calcular el año de referencia para la categoría
+    anio_categoria = anio_nacimiento
+
+    # Restar las temporadas desde 2025 (base) hasta la temporada actual
+    anio_categoria -= (temporada_actual - 2025)
+
+    # Determinar la categoría basándonos en el año de nacimiento ajustado
+    for año, categoria in categorias.items():
+        if anio_categoria >= año:
+            return categoria, gender
+    return 'Absoluto', gender
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -133,6 +170,16 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+
+async def check_minimum_time(swimmer_id: str, category: str, distance: int, style: str, time_seconds: float) -> bool:
+    """Verifica si el tiempo registrado es una mínima en la categoría."""
+    # Obtener la colección de mínimas
+    min_time = await db.ehminimas.find_one({"category": category, "distance": distance, "style": style})
+
+    if min_time:
+        # Comprobar si el tiempo registrado es menor que el tiempo mínimo
+        return time_seconds < min_time["time_seconds"]
+    return False
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
     try:
@@ -296,16 +343,31 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
     # Calcular pace por 100 metros
     pace_100m = time_data.time_seconds / (time_data.distance / 100) if time_data.distance else 0.0
 
+    # Obtener categoría y género
+    category, gender = get_category_and_gender(current_user.birth_date)
+
+    # Verificar si es una mínima
+    is_minimum = await check_minimum_time(
+        swimmer_id=current_user.id,
+        category=f"{gender}_{category}",
+        distance=time_data.distance,
+        style=time_data.style,
+        time_seconds=time_data.time_seconds
+    )
+
+    # Crear el objeto SwimTime
     time_obj = SwimTime(
         **time_data.model_dump(),
         pace_100m=pace_100m,
         recorded_by=current_user.id,
+        minima="si" if is_minimum else "no"
     )
 
     doc = time_obj.model_dump()
     doc["date"] = doc["date"].isoformat()
     doc["created_at"] = doc["created_at"].isoformat()
 
+    # Insertar el tiempo
     await db.swim_times.insert_one(doc)
 
     await update_personal_best(
@@ -318,7 +380,6 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
     )
 
     return time_obj
-
 
 @api_router.get("/times", response_model=List[SwimTime])
 async def get_swim_times(
@@ -342,11 +403,11 @@ async def get_swim_times(
         # Por si hay documentos antiguos sin pace_100m
         if "pace_100m" not in t and t.get("distance") and t.get("time_seconds") is not None:
             t["pace_100m"] = t["time_seconds"] / (t["distance"] / 100)
-        # recorded_by puede faltar, y está permitido en el modelo
+        # Incluir la información de mínima
+        t["minima"] = t.get("minima", "no")
 
     times.sort(key=lambda x: x["date"], reverse=True)
     return times
-
 
 @api_router.put("/times/{time_id}", response_model=SwimTime)
 async def update_swim_time(
