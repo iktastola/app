@@ -134,7 +134,7 @@ def get_category_and_gender(birth_date: datetime, gender: Optional[str] = "fem")
     }
 
     # Obtener el año de nacimiento
-    anio_nacimiento = fecha_nacimiento.year
+    anio_nacimiento = birth_date.year
 
     # Determinar la temporada actual (a partir del 1 de septiembre de cada año)
     hoy = datetime.now()
