@@ -174,7 +174,7 @@ def create_access_token(data: dict) -> str:
 async def check_minimum_time(swimmer_id: str, category: str, distance: int, style: str, time_seconds: float) -> bool:
     """Verifica si el tiempo registrado es una mínima en la categoría."""
     # Obtener la colección de mínimas
-    min_time = await db.ehminimas.find_one({"category": category, "distance": distance, "style": style})
+    min_time = await db.EHMinimas.find_one({"category": category, "distance": distance, "style": style})
 
     if min_time:
         # Comprobar si el tiempo registrado es menor que el tiempo mínimo
