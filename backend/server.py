@@ -86,6 +86,8 @@ class SwimTime(SwimTimeBase):
 
     pace_100m: float = 0.0                   # por si no existe en documentos antiguos
     recorded_by: Optional[str] = None        # idem, opcional para no romper tiempos viejos
+    minima: str = "no"   # 👈 AÑADIR ESTO
+
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -422,6 +424,20 @@ async def update_swim_time(
     doc["date"] = doc["date"].isoformat()
     # recalcular pace_100m en la actualización también
     doc["pace_100m"] = time_data.time_seconds / (time_data.distance / 100) if time_data.distance else 0.0
+    
+    # Obtener categoría y género del nadador
+    swimmer = await db.users.find_one({"id": time_data.swimmer_id})
+    category, gender = get_category_and_gender(swimmer["birth_date"])
+    
+    is_minimum = await check_minimum_time(
+        swimmer_id=time_data.swimmer_id,
+        category=f"{gender}_{category}",
+        distance=time_data.distance,
+        style=time_data.style,
+        time_seconds=time_data.time_seconds,
+    )
+    
+    doc["minima"] = "si" if is_minimum else "no"
 
     result = await db.swim_times.update_one({"id": time_id}, {"$set": doc})
     if result.matched_count == 0:
