@@ -55,6 +55,7 @@ class UserBase(BaseModel):
     name: str
     role: str  # swimmer, coach, admin
     birth_date: Optional[datetime] = None  # Campo opcional para la fecha de nacimiento
+    gender: Optional[str] = None  # Campo opcional para la fecha de nacimiento
 
 
 class UserCreate(UserBase):
@@ -66,6 +67,7 @@ class User(UserBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     birth_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))  # Se añade birth_date
+    gender: str = "fem"
 
 
 class LoginRequest(BaseModel):
@@ -140,11 +142,12 @@ def get_category_and_gender(birth_date: datetime, gender: Optional[str] = "fem")
         2013: 'alevin_2',
         2012: 'infantil_1',
         2011: 'infantil_2',
-        2010: 'Junior_1',
-        2009: 'Junior_2',
-        2008: 'Junior_3',
+        2010: 'junior_1',
+        2009: 'junior_2',
+        2008: 'junior_3',
         2007: 'abs_jov',
         2006: 'abs_jov',
+        2005: 'abs_1',
     }
 
     # Obtener el año de nacimiento
@@ -168,7 +171,7 @@ def get_category_and_gender(birth_date: datetime, gender: Optional[str] = "fem")
     for año, categoria in categorias.items():
         if anio_categoria >= año:
             return categoria, gender
-    return 'Absoluto', gender
+    return 'abs_1', gender
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -185,16 +188,25 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def check_minimum_time(swimmer_id: str, category: str, distance: int, style: str, time_seconds: float) -> bool:
-    """Verifica si el tiempo registrado es una mínima en la categoría."""
-    # Obtener la colección de mínimas
-    min_time = await db.EHMinimas.find_one({"category": category, "distance": distance, "style": style})
-    logger.info("min time es : %s", min_time )
+async def check_minimum_time(swimmer_id, category, distance, style, time_seconds):
+    doc = await db.EHMinimas.find_one({
+        "prueba": style,
+        "distancia": str(distance)
+    })
 
-    if min_time:
-        # Comprobar si el tiempo registrado es menor que el tiempo mínimo
-        return time_seconds < min_time["time_seconds"]
+    if not doc:
+        return False
+
+    # ejemplo: fem_alevin_2
+    key = category
+
+    for t in doc["tiempos"]:
+        if key in t:
+            min_time = t["time_seconds"]
+            return time_seconds < min_time
+
     return False
+
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
     try:
@@ -255,6 +267,9 @@ async def register(user_data: UserCreate, current_user: User = Depends(get_curre
     if "birth_date" not in user_dict:
         user_dict["birth_date"] = datetime.now(timezone.utc)  # Se asigna la fecha actual si no se pasa
 
+    if "gender" not in user_dict:
+        user_dict["gender"] = "fem"  # Se asigna fem si no se pasa
+
     user_obj = User(**user_dict)
     doc = user_obj.model_dump()
     doc["password"] = hashed_pw
@@ -276,6 +291,9 @@ async def get_users(current_user: User = Depends(get_current_user)):
             user["created_at"] = datetime.fromisoformat(user["created_at"])
         if isinstance(user.get("birth_date"), str):
             user["birth_date"] = datetime.fromisoformat(user["birth_date"])
+        if not user.get("gender"):
+            user["gender"] = "fem"
+
     return users
 
 
@@ -293,6 +311,10 @@ async def get_user(user_id: str, current_user: User = Depends(get_current_user))
 
     if isinstance(user_doc.get("birth_date"), str):
         user_doc["birth_date"] = datetime.fromisoformat(user_doc["birth_date"])
+
+    if not user.get("gender"):
+        user["gender"] = "fem"
+
 
     return User(**user_doc)
 
@@ -326,6 +348,12 @@ async def update_user(user_id: str, user_data: UserBase, current_user: User = De
         # Si no se pasa birth_date, asignar el valor actual
         update_doc["birth_date"] = existing_user["birth_date"] if "birth_date" in existing_user else datetime.now(timezone.utc)
 
+    if user_data.gender is not None:
+        update_doc["gender"] = user_data.gender
+    else:
+        update_doc["gender"] = existing_user.get("gender", "fem")
+
+
     result = await db.users.update_one({"id": user_id}, {"$set": update_doc})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -357,9 +385,10 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
 
     # Calcular pace por 100 metros
     pace_100m = time_data.time_seconds / (time_data.distance / 100) if time_data.distance else 0.0
+    gender_value = current_user.gender if current_user.gender else "fem"
 
     # Obtener categoría y género
-    category, gender = get_category_and_gender(current_user.birth_date)
+    category, gender = get_category_and_gender(current_user.birth_date,gender_value)
 
     logger.info("category es: %s", category )
     logger.info("gender es: %s", gender )
@@ -443,7 +472,9 @@ async def update_swim_time(
     
     # Obtener categoría y género del nadador
     swimmer = await db.users.find_one({"id": time_data.swimmer_id})
-    category, gender = get_category_and_gender(swimmer["birth_date"])
+    gender_value = swimmer.get("gender", "fem") or "fem"
+
+    category, gender = get_category_and_gender(swimmer["birth_date"],gender_value)
     
 
     logger.info("category es: %s", category )
