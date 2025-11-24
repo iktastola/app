@@ -10,6 +10,7 @@ import bcrypt
 import jwt
 import uuid
 import os
+import sys
 import logging
 
 ROOT_DIR = Path(__file__).parent
