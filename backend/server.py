@@ -177,6 +177,7 @@ async def check_minimum_time(swimmer_id: str, category: str, distance: int, styl
     """Verifica si el tiempo registrado es una mínima en la categoría."""
     # Obtener la colección de mínimas
     min_time = await db.EHMinimas.find_one({"category": category, "distance": distance, "style": style})
+    logger.info("min time es : %s", min_time )
 
     if min_time:
         # Comprobar si el tiempo registrado es menor que el tiempo mínimo
@@ -348,6 +349,9 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
     # Obtener categoría y género
     category, gender = get_category_and_gender(current_user.birth_date)
 
+    logger.info("category es: %s", category )
+    logger.info("gender es: %s", gender )
+
     # Verificar si es una mínima
     is_minimum = await check_minimum_time(
         swimmer_id=current_user.id,
@@ -429,6 +433,10 @@ async def update_swim_time(
     swimmer = await db.users.find_one({"id": time_data.swimmer_id})
     category, gender = get_category_and_gender(swimmer["birth_date"])
     
+
+    logger.info("category es: %s", category )
+    logger.info("gender es: %s", gender )
+
     is_minimum = await check_minimum_time(
         swimmer_id=time_data.swimmer_id,
         category=f"{gender}_{category}",
@@ -617,6 +625,9 @@ app.add_middleware(
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # IMPORTANTE: Render lee de stdout
+    ]
 )
 logger = logging.getLogger(__name__)
 
