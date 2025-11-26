@@ -436,7 +436,7 @@ async def get_swim_times(
         if "oficial" not in t:
             t["oficial"] = True     # Default
 
-    times.sort(key=lambda x: x["date"], reverse=True)
+    times.sort(key=lambda x: x["date"].astimezone(timezone.utc) if x["date"].tzinfo is None else x["date"], reverse=True)
     return times
 
 
