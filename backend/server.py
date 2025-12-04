@@ -480,6 +480,22 @@ async def update_swim_time(
     updated_doc["created_at"] = datetime.fromisoformat(updated_doc["created_at"])
 
     return SwimTime(**updated_doc)
+
+@api_router.delete("/times/{time_id}")
+async def delete_swim_time(time_id: str, current_user: User = Depends(get_current_user)):
+    if current_user.role not in ["coach", "admin"]:
+        raise HTTPException(status_code=403, detail="Solo entrenadores y administradores pueden eliminar tiempos")
+
+    time_doc = await db.swim_times.find_one({"id": time_id})
+    if not time_doc:
+        raise HTTPException(status_code=404, detail="Tiempo no encontrado")
+
+    await db.swim_times.delete_one({"id": time_id})
+
+    await recalculate_personal_best(time_doc["swimmer_id"], time_doc["distance"], time_doc["style"])
+
+    return {"message": "Tiempo eliminado"}
+
 # ================== PERSONAL BESTS ==================
 
 async def update_personal_best(
