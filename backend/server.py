@@ -570,6 +570,79 @@ async def get_personal_bests(
 
     return pbs
 
+
+@api_router.post("/audit")
+async def audit_database(current_user: User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores pueden ejecutar la auditoría")
+
+    swimmers = await db.users.find({"role": "swimmer"}).to_list(1000)
+    
+    stats = {
+        "swimmers_processed": 0,
+        "times_checked": 0,
+        "pbs_updated": 0
+    }
+
+    for swimmer in swimmers:
+        swimmer_id = swimmer["id"]
+        birth_date = swimmer.get("birth_date")
+        gender = swimmer.get("gender", "fem")
+
+        if isinstance(birth_date, str):
+            birth_date = datetime.fromisoformat(birth_date)
+        
+        if not birth_date:
+            continue
+
+        category, gen = get_category_and_gender(birth_date, gender)
+        category_key = f"{gen}_{category}"
+
+        # 1. Re-check all official times for minima
+        official_times = await db.swim_times.find({
+            "swimmer_id": swimmer_id,
+            "oficial": True
+        }).to_list(1000)
+
+        for t in official_times:
+            is_minimum = await check_minimum_time(
+                swimmer_id=swimmer_id,
+                category=category_key,
+                distance=t["distance"],
+                style=t["style"],
+                time_seconds=t["time_seconds"]
+            )
+            
+            new_minima = "si" if is_minimum else "no"
+            if t.get("minima") != new_minima:
+                await db.swim_times.update_one(
+                    {"id": t["id"]},
+                    {"$set": {"minima": new_minima}}
+                )
+            stats["times_checked"] += 1
+
+        # 2. Recalculate PBs for this swimmer
+        # We can use a set of (distance, style) from all official times
+        tests = set((t["distance"], t["style"]) for t in official_times)
+        for dist, style in tests:
+            await recalculate_personal_best(swimmer_id, dist, style)
+            stats["pbs_updated"] += 1
+        
+        # 3. Clean up PBs that might exist but have no official times anymore
+        # Fetch current PBs
+        current_pbs = await db.personal_bests.find({"swimmer_id": swimmer_id}).to_list(100)
+        for pb in current_pbs:
+            if (pb["distance"], pb["style"]) not in tests:
+                await db.personal_bests.delete_one({
+                    "swimmer_id": swimmer_id,
+                    "distance": pb["distance"],
+                    "style": pb["style"]
+                })
+
+        stats["swimmers_processed"] += 1
+
+    return {"status": "success", "stats": stats}
+
 # ================== LOCKER ROUTES ==================
 
 @api_router.get("/lockers/{swimmer_id}", response_model=Locker)
