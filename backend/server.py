@@ -176,18 +176,25 @@ def create_access_token(data: dict) -> str:
 
 
 async def check_minimum_time(swimmer_id, category, distance, style, time_seconds):
+    print(f"DEBUG: Checking minima for {category} - {style} {distance}m - Time: {time_seconds}")
     doc = await db.EHMinimas.find_one({
         "prueba": style,
         "distancia": str(distance)
     })
 
     if not doc:
+        print("DEBUG: No DOC found in EHMinimas")
         return False
 
+    print(f"DEBUG: Found DOC: {doc.get('_id')}")
     for t in doc.get("tiempos", []):
+        # print(f"DEBUG: Checking entry: {t}")
         if category in t:
+            limit = t["time_seconds"]
+            print(f"DEBUG: Match found for {category}. Limit: {limit}. Is {time_seconds} < {limit}? {time_seconds < limit}")
             return time_seconds < t["time_seconds"]
 
+    print(f"DEBUG: No matching category '{category}' in DOC times")
     return False
 
 
@@ -396,16 +403,12 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
 
     await db.swim_times.insert_one(doc)
 
-    # 🔥 SOLO si oficial actualizamos PB
-    if time_data.oficial:
-        await update_personal_best(
-            time_obj.swimmer_id,
-            time_obj.distance,
-            time_obj.style,
-            time_obj.time_seconds,
-            time_obj.date,
-            time_obj.competition,
-        )
+    # 🔥 Recalculamos PB (recalculate_personal_best ya filtra por oficial=True)
+    await recalculate_personal_best(
+        time_obj.swimmer_id,
+        time_obj.distance,
+        time_obj.style
+    )
 
     return time_obj
 
@@ -472,8 +475,8 @@ async def update_swim_time(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Tiempo no encontrado")
 
-    if time_data.oficial:
-        await recalculate_personal_best(time_data.swimmer_id, time_data.distance, time_data.style)
+    # 🔥 Siempre recalculamos PB, ya que pudo haber pasado de oficial a no oficial o viceversa
+    await recalculate_personal_best(time_data.swimmer_id, time_data.distance, time_data.style)
 
     updated_doc = await db.swim_times.find_one({"id": time_id}, {"_id": 0})
     updated_doc["date"] = datetime.fromisoformat(updated_doc["date"])
@@ -510,20 +513,19 @@ async def update_personal_best(
         {"swimmer_id": swimmer_id, "distance": distance, "style": style}
     )
 
-    if not pb_doc or time_seconds < pb_doc["best_time"]:
-        doc = {
-            "swimmer_id": swimmer_id,
-            "distance": distance,
-            "style": style,
-            "best_time": time_seconds,
-            "date": date.isoformat(),
-            "competition": competition,
-        }
-        await db.personal_bests.update_one(
-            {"swimmer_id": swimmer_id, "distance": distance, "style": style},
-            {"$set": doc},
-            upsert=True,
-        )
+    doc = {
+        "swimmer_id": swimmer_id,
+        "distance": distance,
+        "style": style,
+        "best_time": time_seconds,
+        "date": date.isoformat() if isinstance(date, datetime) else date,
+        "competition": competition,
+    }
+    await db.personal_bests.update_one(
+        {"swimmer_id": swimmer_id, "distance": distance, "style": style},
+        {"$set": doc},
+        upsert=True,
+    )
 
 
 async def recalculate_personal_best(swimmer_id: str, distance: int, style: str):
