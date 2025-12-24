@@ -70,6 +70,11 @@ class User(UserBase):
     gender: str = "fem"
 
 
+class UserSelfUpdate(BaseModel):
+    password: Optional[str] = None
+    birth_date: Optional[datetime] = None
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -367,6 +372,34 @@ async def delete_user(user_id: str, current_user: User = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     return {"message": "Usuario eliminado"}
+
+
+@api_router.patch("/users/me", response_model=User)
+async def update_self_profile(user_data: UserSelfUpdate, current_user: User = Depends(get_current_user)):
+    update_doc = {}
+
+    if user_data.birth_date:
+        update_doc["birth_date"] = user_data.birth_date
+
+    if user_data.password:
+        import re
+        if len(user_data.password) < 8 or not re.search(r"\d", user_data.password):
+            raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 8 caracteres y un número")
+        update_doc["password"] = hash_password(user_data.password)
+
+    if not update_doc:
+         return current_user
+
+    result = await db.users.update_one({"id": current_user.id}, {"$set": update_doc})
+    
+    updated_user_doc = await db.users.find_one({"id": current_user.id}, {"_id": 0, "password": 0})
+    if isinstance(updated_user_doc.get("created_at"), str):
+        updated_user_doc["created_at"] = datetime.fromisoformat(updated_user_doc["created_at"])
+    if isinstance(updated_user_doc.get("birth_date"), str):
+        updated_user_doc["birth_date"] = datetime.fromisoformat(updated_user_doc["birth_date"])
+
+    return User(**updated_user_doc)
+
 
 # ================== SWIM TIMES ROUTES ==================
 
