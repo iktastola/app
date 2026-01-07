@@ -105,6 +105,7 @@ class SwimTime(SwimTimeBase):
     pace_100m: float = 0.0
     recorded_by: Optional[str] = None
     minima: str = "no"
+    minima_bizkaia: str = "no"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -200,6 +201,28 @@ async def check_minimum_time(swimmer_id, category, distance, style, time_seconds
             return time_seconds < t["time_seconds"]
 
     print(f"DEBUG: No matching category '{category}' in DOC times")
+    return False
+
+
+async def check_minimum_time_bizkaia(swimmer_id, category, distance, style, time_seconds):
+    print(f"DEBUG: Checking Bizkaia minima for {category} - {style} {distance}m - Time: {time_seconds}")
+    doc = await db.BizkaiaMinimas.find_one({
+        "prueba": style,
+        "distancia": str(distance)
+    })
+
+    if not doc:
+        print("DEBUG: No DOC found in BizkaiaMinimas")
+        return False
+
+    print(f"DEBUG: Found DOC: {doc.get('_id')}")
+    for t in doc.get("tiempos", []):
+        if category in t:
+            limit = t["time_seconds"]
+            print(f"DEBUG: Match found for {category}. Limit: {limit}. Is {time_seconds} < {limit}? {time_seconds < limit}")
+            return time_seconds < t["time_seconds"]
+
+    print(f"DEBUG: No matching category '{category}' in BizkaiaMinimas DOC times")
     return False
 
 
@@ -422,12 +445,22 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
             style=time_data.style,
             time_seconds=time_data.time_seconds
         )
+        is_minimum_bizkaia = await check_minimum_time_bizkaia(
+            swimmer_id=time_data.swimmer_id,
+            category=f"{gender}_{category}",
+            distance=time_data.distance,
+            style=time_data.style,
+            time_seconds=time_data.time_seconds
+        )
+    else:
+        is_minimum_bizkaia = False
 
     time_obj = SwimTime(
         **time_data.model_dump(),
         pace_100m=pace_100m,
         recorded_by=current_user.id,
-        minima="si" if is_minimum else "no"
+        minima="si" if is_minimum else "no",
+        minima_bizkaia="si" if is_minimum_bizkaia else "no"
     )
 
     doc = time_obj.model_dump()
@@ -469,6 +502,8 @@ async def get_swim_times(
             t["pace_100m"] = t["time_seconds"] / (t["distance"] / 100)
         if "minima" not in t:
             t["minima"] = "no"
+        if "minima_bizkaia" not in t:
+            t["minima_bizkaia"] = "no"
         if "oficial" not in t:
             t["oficial"] = True     # Default
 
@@ -501,8 +536,18 @@ async def update_swim_time(
             style=time_data.style,
             time_seconds=time_data.time_seconds,
         )
+        is_minimum_bizkaia = await check_minimum_time_bizkaia(
+            swimmer_id=time_data.swimmer_id,
+            category=f"{gender}_{category}",
+            distance=time_data.distance,
+            style=time_data.style,
+            time_seconds=time_data.time_seconds,
+        )
+    else:
+        is_minimum_bizkaia = False
 
     doc["minima"] = "si" if is_minimum else "no"
+    doc["minima_bizkaia"] = "si" if is_minimum_bizkaia else "no"
 
     result = await db.swim_times.update_one({"id": time_id}, {"$set": doc})
     if result.matched_count == 0:
@@ -653,6 +698,21 @@ async def audit_database(current_user: User = Depends(get_current_user)):
                     {"$set": {"minima": new_minima}}
                 )
             stats["times_checked"] += 1
+            
+            is_minimum_bizkaia = await check_minimum_time_bizkaia(
+                swimmer_id=swimmer_id,
+                category=category_key,
+                distance=t["distance"],
+                style=t["style"],
+                time_seconds=t["time_seconds"]
+            )
+            
+            new_minima_bizkaia = "si" if is_minimum_bizkaia else "no"
+            if t.get("minima_bizkaia") != new_minima_bizkaia:
+                await db.swim_times.update_one(
+                    {"id": t["id"]},
+                    {"$set": {"minima_bizkaia": new_minima_bizkaia}}
+                )
 
         # 2. Recalculate PBs for this swimmer
         # We can use a set of (distance, style) from all official times
