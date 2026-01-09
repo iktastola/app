@@ -1,0 +1,42 @@
+name: Reiniciar servicio en Render
+
+on:
+  # Ejecutar este workflow cuando se haga un push en la rama `main`
+  push:
+    branches:
+      - main
+
+jobs:
+  restart_service:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python (para instalar jq si no está instalado)
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'  # Configura la versión de Python que necesites
+
+      - name: Instalar jq (si no está disponible)
+        run: sudo apt-get install jq
+
+      - name: Ejecutar script de reinicio
+        run: |
+          # Definir el token y el ID del servicio
+          API_TOKEN="rnd_Dyxihit2C72zzvdee1gQLv4vBZp1"  # Reemplaza con tu token de API
+          SERVICE_ID="srv-d4dfq12li9vc73cgsud0"  # Reemplaza con el ID de tu servicio
+
+          # Consultar el estado del servicio
+          STATUS=$(curl -s -X GET https://api.render.com/v1/services/$SERVICE_ID \
+            -H "Authorization: Bearer $API_TOKEN" | jq -r .suspended)
+
+          if [[ "$STATUS" == "not_suspended" ]]; then
+            echo "El servicio está en ejecución."
+          else
+            echo "El servicio está detenido. Reiniciando..."
+            curl -X POST https://api.render.com/v1/services/$SERVICE_ID/restart \
+              -H "Authorization: Bearer $API_TOKEN"
+          fi
+
