@@ -1,10 +1,8 @@
 name: Reiniciar servicio en Render
 
 on:
-  # Ejecutar este workflow cuando se haga un push en la rama `main`
-  push:
-    branches:
-      - main
+  schedule:
+    - cron: '*/10 * * * *'  # Ejecutará el flujo de trabajo cada 10 minutos
 
 jobs:
   restart_service:
