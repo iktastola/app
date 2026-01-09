@@ -1,4 +1,4 @@
-name: Reiniciar servicio en Render
+name: Reiniciar servicio en Render croneado
 
 on:
   schedule:
