@@ -56,6 +56,7 @@ class UserBase(BaseModel):
     role: str
     birth_date: Optional[datetime] = None
     gender: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class UserCreate(UserBase):
@@ -73,6 +74,7 @@ class User(UserBase):
 class UserSelfUpdate(BaseModel):
     password: Optional[str] = None
     birth_date: Optional[datetime] = None
+    avatar_url: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -334,9 +336,8 @@ async def get_user(user_id: str, current_user: User = Depends(get_current_user))
     if isinstance(user_doc.get("birth_date"), str):
         user_doc["birth_date"] = datetime.fromisoformat(user_doc["birth_date"])
 
-    if not user.get("gender"):
-        user["gender"] = "fem"
-
+    if not user_doc.get("gender"):
+        user_doc["gender"] = "fem"
 
     return User(**user_doc)
 
@@ -375,6 +376,11 @@ async def update_user(user_id: str, user_data: UserBase, current_user: User = De
     else:
         update_doc["gender"] = existing_user.get("gender", "fem")
 
+    if user_data.avatar_url is not None:
+        update_doc["avatar_url"] = user_data.avatar_url
+    else:
+        update_doc["avatar_url"] = existing_user.get("avatar_url")
+
 
     result = await db.users.update_one({"id": user_id}, {"$set": update_doc})
     if result.matched_count == 0:
@@ -411,6 +417,11 @@ async def update_self_profile(user_data: UserSelfUpdate, current_user: User = De
         if len(user_data.password) < 8 or not re.search(r"\d", user_data.password):
             raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 8 caracteres y un número")
         update_doc["password"] = hash_password(user_data.password)
+
+    if hasattr(user_data, 'avatar_url') and user_data.avatar_url:
+        update_doc["avatar_url"] = user_data.avatar_url
+    elif "avatar_url" in (await db.users.find_one({"id": current_user.id})) : # Check if it exists in request or keep old
+         pass # No change if not in UserSelfUpdate
 
     if not update_doc:
          return current_user
