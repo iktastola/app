@@ -184,8 +184,20 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def check_minimum_time(swimmer_id, category, distance, style, time_seconds):
+async def check_minimum_time(swimmer_id, category, distance, style, time_seconds, time_date=None):
     print(f"DEBUG: Checking minima for {category} - {style} {distance}m - Time: {time_seconds}")
+
+    # Marcas con un tiempo superior a 14 meses no son consideradas mínima
+    if time_date is not None:
+        if isinstance(time_date, str):
+            time_date = datetime.fromisoformat(time_date)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=14 * 30)
+        if time_date.tzinfo is None:
+            time_date = time_date.replace(tzinfo=timezone.utc)
+        if time_date < cutoff:
+            print(f"DEBUG: Time date {time_date} is older than 14 months, not a minima")
+            return False
+
     doc = await db.EHMinimas.find_one({
         "prueba": style,
         "distancia": str(distance)
@@ -207,8 +219,20 @@ async def check_minimum_time(swimmer_id, category, distance, style, time_seconds
     return False
 
 
-async def check_minimum_time_bizkaia(swimmer_id, category, distance, style, time_seconds, piscina_metros=25):
+async def check_minimum_time_bizkaia(swimmer_id, category, distance, style, time_seconds, piscina_metros=25, time_date=None):
     print(f"DEBUG: Checking Bizkaia minima for {category} - {style} {distance}m ({piscina_metros}m pool) - Time: {time_seconds}")
+
+    # Marcas con un tiempo superior a 14 meses no son consideradas mínima
+    if time_date is not None:
+        if isinstance(time_date, str):
+            time_date = datetime.fromisoformat(time_date)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=14 * 30)
+        if time_date.tzinfo is None:
+            time_date = time_date.replace(tzinfo=timezone.utc)
+        if time_date < cutoff:
+            print(f"DEBUG: Time date {time_date} is older than 14 months, not a minima")
+            return False
+
     doc = await db.BizkaiaMinimas.find_one({
         "prueba": style,
         "distancia": str(distance),
@@ -450,13 +474,21 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
     # 🔥 SOLO si oficial calculamos mínimas
     is_minimum = False
     if time_data.oficial:
-        category, gender = get_category_and_gender(current_user.birth_date, current_user.gender)
+        # Buscar al nadador para usar SU birth_date y gender (no el del coach/admin)
+        swimmer = await db.users.find_one({"id": time_data.swimmer_id})
+        if not swimmer:
+            raise HTTPException(status_code=404, detail="Nadador no encontrado")
+        swimmer_birth_date = swimmer.get("birth_date")
+        if isinstance(swimmer_birth_date, str):
+            swimmer_birth_date = datetime.fromisoformat(swimmer_birth_date)
+        category, gender = get_category_and_gender(swimmer_birth_date, swimmer.get("gender", "fem"))
         is_minimum = await check_minimum_time(
             swimmer_id=time_data.swimmer_id,
             category=f"{gender}_{category}",
             distance=time_data.distance,
             style=time_data.style,
-            time_seconds=time_data.time_seconds
+            time_seconds=time_data.time_seconds,
+            time_date=time_data.date
         )
         is_minimum_bizkaia = await check_minimum_time_bizkaia(
             swimmer_id=time_data.swimmer_id,
@@ -464,7 +496,8 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
             distance=time_data.distance,
             style=time_data.style,
             time_seconds=time_data.time_seconds,
-            piscina_metros=time_data.piscina_metros
+            piscina_metros=time_data.piscina_metros,
+            time_date=time_data.date
         )
     else:
         is_minimum_bizkaia = False
@@ -551,15 +584,16 @@ async def update_swim_time(
             distance=time_data.distance,
             style=time_data.style,
             time_seconds=time_data.time_seconds,
+            time_date=time_data.date
         )
         is_minimum_bizkaia = await check_minimum_time_bizkaia(
             swimmer_id=time_data.swimmer_id,
             category=f"{gender}_{category}",
             distance=time_data.distance,
             style=time_data.style,
-
             time_seconds=time_data.time_seconds,
-            piscina_metros=time_data.piscina_metros
+            piscina_metros=time_data.piscina_metros,
+            time_date=time_data.date
         )
     else:
         is_minimum_bizkaia = False
@@ -706,7 +740,8 @@ async def audit_database(current_user: User = Depends(get_current_user)):
                 category=category_key,
                 distance=t["distance"],
                 style=t["style"],
-                time_seconds=t["time_seconds"]
+                time_seconds=t["time_seconds"],
+                time_date=t.get("date")
             )
             
             new_minima = "si" if is_minimum else "no"
@@ -723,7 +758,8 @@ async def audit_database(current_user: User = Depends(get_current_user)):
                 distance=t["distance"],
                 style=t["style"],
                 time_seconds=t["time_seconds"],
-                piscina_metros=t.get("piscina_metros", 25)
+                piscina_metros=t.get("piscina_metros", 25),
+                time_date=t.get("date")
             )
             
             new_minima_bizkaia = "si" if is_minimum_bizkaia else "no"
