@@ -454,6 +454,83 @@ def build_sepa_router(db, get_current_user) -> APIRouter:
             raise HTTPException(404, "Remesa no encontrada")
         return doc
 
+    @router.get("/remesas/{remesa_id}/payments")
+    async def list_remesa_payments(remesa_id: str, admin=Depends(require_admin)):
+        """Lista los pagos incluidos en la remesa con datos del nadador."""
+        remesa = await db.remesas.find_one(
+            {"id": remesa_id}, {"_id": 0, "payment_ids": 1}
+        )
+        if not remesa:
+            raise HTTPException(404, "Remesa no encontrada")
+
+        ids = remesa.get("payment_ids", [])
+        if not ids:
+            return []
+
+        pagos = await db.payments.find(
+            {"id": {"$in": ids}}, {"_id": 0}
+        ).to_list(5000)
+
+        # Join user info
+        user_ids = list({p["user_id"] for p in pagos})
+        users = await db.users.find(
+            {"id": {"$in": user_ids}}, {"_id": 0, "id": 1, "name": 1, "email": 1}
+        ).to_list(5000)
+        users_by_id = {u["id"]: u for u in users}
+
+        out = []
+        for p in pagos:
+            u = users_by_id.get(p["user_id"], {})
+            p["due_date"] = p["due_date"].isoformat() if hasattr(p.get("due_date"), "isoformat") else p.get("due_date")
+            out.append({
+                "id": p["id"],
+                "user_id": p["user_id"],
+                "user_name": u.get("name"),
+                "user_email": u.get("email"),
+                "amount": p["amount"],
+                "concept": p.get("concept"),
+                "status": p.get("status"),
+                "sequence_type": p.get("sequence_type"),
+                "end_to_end_id": p.get("end_to_end_id"),
+                "return_reason": p.get("return_reason"),
+            })
+        return out
+
+    @router.post("/remesas/{remesa_id}/close")
+    async def close_remesa(remesa_id: str, admin=Depends(require_admin)):
+        """Cierra la remesa: pagos 'in_remesa' → 'paid', remesa → 'closed'.
+
+        Usarlo después de que hayan pasado los días hábiles de devolución y
+        hayas marcado las devoluciones existentes. Todo lo no devuelto pasa
+        a considerarse cobrado.
+        """
+        remesa = await db.remesas.find_one({"id": remesa_id}, {"_id": 0})
+        if not remesa:
+            raise HTTPException(404, "Remesa no encontrada")
+        if remesa.get("status") == "closed":
+            raise HTTPException(409, "La remesa ya está cerrada")
+
+        ids = remesa.get("payment_ids", [])
+        now = datetime.now(timezone.utc)
+        paid_res = await db.payments.update_many(
+            {"id": {"$in": ids}, "status": "in_remesa"},
+            {"$set": {"status": "paid", "paid_at": now}},
+        )
+
+        await db.remesas.update_one(
+            {"id": remesa_id}, {"$set": {"status": "closed", "closed_at": now}}
+        )
+
+        await _audit(admin.id, "remesa.close", remesa_id, {
+            "marked_paid": paid_res.modified_count,
+        })
+
+        return {
+            "remesa_id": remesa_id,
+            "status": "closed",
+            "marked_paid": paid_res.modified_count,
+        }
+
     @router.delete("/remesas/{remesa_id}")
     async def delete_remesa(remesa_id: str, admin=Depends(require_admin)):
         """BORRA una remesa y revierte sus pagos 'in_remesa' a 'pending'.

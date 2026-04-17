@@ -46,12 +46,22 @@ async def ensure_indexes(db) -> None:
     )
 
     # --- payments ----------------------------------------------------------
+    # Migración: los índices unique+sparse antiguos metían un hueco para null
+    # (sparse solo excluye docs sin el campo, no con valor null), lo que
+    # causaba duplicate key al revertir/limpiar pagos. Se sustituyen por
+    # partialFilterExpression → solo indexa cuando hay valor string real.
+    existing = await db.payments.index_information()
+    for old_name in ("uq_payments_user_period", "uq_payments_e2e"):
+        info = existing.get(old_name)
+        if info and "partialFilterExpression" not in info:
+            logger.info(f"SEPA: migrando índice {old_name} a partial")
+            await db.payments.drop_index(old_name)
+
     # Evita duplicar el cobro del mismo mes al mismo nadador.
-    # sparse: permite múltiples docs sin billing_period (cobros puntuales).
     await db.payments.create_index(
         [("user_id", ASCENDING), ("billing_period", ASCENDING)],
         unique=True,
-        sparse=True,
+        partialFilterExpression={"billing_period": {"$type": "string"}},
         name="uq_payments_user_period",
     )
     # Query principal del endpoint generate: pendientes por rango de fecha.
@@ -64,11 +74,11 @@ async def ensure_indexes(db) -> None:
         [("remesa_id", ASCENDING)],
         name="ix_payments_remesa",
     )
-    # end_to_end_id único cuando se asigna.
+    # end_to_end_id único cuando se asigna (null/ausente no se indexan).
     await db.payments.create_index(
         [("end_to_end_id", ASCENDING)],
         unique=True,
-        sparse=True,
+        partialFilterExpression={"end_to_end_id": {"$type": "string"}},
         name="uq_payments_e2e",
     )
 
