@@ -848,6 +848,10 @@ async def update_locker(swimmer_id: str, locker_data: LockerCreate, current_user
 
 app.include_router(api_router)
 
+# SEPA (factory pattern: inyecta db + auth ya disponibles)
+from sepa.routes import build_sepa_router
+app.include_router(build_sepa_router(db, get_current_user))
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -855,6 +859,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_sepa_indexes():
+    from sepa.init_db import ensure_indexes
+    try:
+        await ensure_indexes(db)
+    except Exception as e:
+        logger.error(f"SEPA: fallo creando índices: {e}")
 
 
 @app.on_event("shutdown")
