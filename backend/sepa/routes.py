@@ -454,6 +454,50 @@ def build_sepa_router(db, get_current_user) -> APIRouter:
             raise HTTPException(404, "Remesa no encontrada")
         return doc
 
+    @router.delete("/remesas/{remesa_id}")
+    async def delete_remesa(remesa_id: str, admin=Depends(require_admin)):
+        """BORRA una remesa y revierte sus pagos 'in_remesa' a 'pending'.
+
+        ⚠️ Acción peligrosa:
+        - Pagos en estado 'paid' o 'returned' NO se tocan.
+        - `mandate.first_used_at` NO se revierte (si necesitas reenviar
+          como FRST, cancela y recrea el mandato).
+        - Si la remesa ya se subió al banco, esto solo altera TU base de
+          datos; Kutxabank la ejecutará igual.
+        """
+        remesa = await db.remesas.find_one({"id": remesa_id}, {"_id": 0})
+        if not remesa:
+            raise HTTPException(404, "Remesa no encontrada")
+
+        payment_ids = remesa.get("payment_ids", [])
+        reverted_count = 0
+        if payment_ids:
+            res = await db.payments.update_many(
+                {"id": {"$in": payment_ids}, "status": "in_remesa"},
+                {"$set": {
+                    "status": "pending",
+                    "remesa_id": None,
+                    "end_to_end_id": None,
+                    "sequence_type": None,
+                }},
+            )
+            reverted_count = res.modified_count
+
+        await db.remesas.delete_one({"id": remesa_id})
+
+        await _audit(admin.id, "remesa.delete", remesa_id, {
+            "message_id": remesa.get("message_id"),
+            "n_payment_ids": len(payment_ids),
+            "reverted_to_pending": reverted_count,
+        })
+
+        return {
+            "deleted": True,
+            "remesa_id": remesa_id,
+            "reverted_to_pending": reverted_count,
+            "untouched": len(payment_ids) - reverted_count,
+        }
+
     @router.get("/remesas/{remesa_id}/xml")
     async def download_remesa_xml(remesa_id: str, admin=Depends(require_admin)):
         """Descarga el fichero XML de la remesa para subir a Kutxabank."""
