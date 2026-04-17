@@ -13,7 +13,10 @@ import os
 import sys
 import logging
 
+from dotenv import load_dotenv
+
 ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")  # en Render no pasa nada si no existe
 
 # ================== MongoDB ==================
 
@@ -276,6 +279,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Token expired")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+# ================== HEALTH ==================
+
+@api_router.get("/health")
+async def health():
+    """Endpoint público, sin auth ni BBDD. Para keepalive/monitoring."""
+    return {"ok": True}
+
 
 # ================== AUTH ROUTES ==================
 # (registrar/login idénticos, no los corto por integridad)

@@ -12,9 +12,13 @@ import uuid
 from datetime import date, datetime, time, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from . import crypto
+from .billing import BillingError, run_monthly_billing
+from .service import RemesaError, generate_remesa
+from .xml_builder import SepaXmlError
 from .models import (
     BankAccount,
     BankAccountCreate,
@@ -186,7 +190,8 @@ def build_sepa_router(db, get_current_user) -> APIRouter:
     # ============================= MANDATES ===============================
 
     def _new_mandate_id() -> str:
-        return f"MNDT-{uuid.uuid4()}"
+        # SEPA permite máx 35 chars. 'MNDT-' (5) + 26 hex = 31 chars.
+        return f"MNDT-{uuid.uuid4().hex[:26]}"
 
     @router.post("/mandates", response_model=Mandate)
     async def create_mandate(payload: MandateCreate, admin=Depends(require_admin)):
@@ -378,5 +383,193 @@ def build_sepa_router(db, get_current_user) -> APIRouter:
         await db.payments.delete_one({"id": payment_id})
         await _audit(admin.id, "payment.delete", payment_id)
         return {"deleted": True}
+
+    # ============================= BILLING ===============================
+
+    @router.post("/billing/run")
+    async def run_billing(
+        month: str = Query(..., description="Mes a facturar en formato YYYY-MM", example="2026-05"),
+        admin=Depends(require_admin),
+    ):
+        """Genera los cobros pendientes (45€) para el mes indicado.
+
+        Idempotente: si un nadador ya tiene pago para ese `billing_period`,
+        se salta sin error.
+        """
+        try:
+            return await run_monthly_billing(db, month, admin.id)
+        except BillingError as e:
+            raise HTTPException(400, str(e))
+
+    # ============================= REMESAS ================================
+
+    @router.post("/remesas/generate")
+    async def generate_remesa_endpoint(
+        payload: dict = Body(..., example={
+            "date_from": "2026-05-01",
+            "date_to": "2026-05-31",
+        }),
+        admin=Depends(require_admin),
+    ):
+        """Genera una nueva remesa con los pagos pendientes del rango.
+
+        Body:
+            { date_from, date_to, collection_date? }   (formato YYYY-MM-DD)
+
+        Respuesta: resumen JSON. Para descargar el XML usa el endpoint
+        GET /remesas/{id}/xml con el remesa_id devuelto aquí.
+        """
+        try:
+            date_from = date.fromisoformat(payload["date_from"])
+            date_to = date.fromisoformat(payload["date_to"])
+            collection_date = (
+                date.fromisoformat(payload["collection_date"])
+                if payload.get("collection_date") else None
+            )
+        except (KeyError, ValueError) as e:
+            raise HTTPException(400, f"Fechas inválidas: {e}")
+
+        try:
+            return await generate_remesa(db, date_from, date_to, collection_date, admin.id)
+        except (RemesaError, SepaXmlError) as e:
+            raise HTTPException(400, str(e))
+
+    @router.get("/remesas")
+    async def list_remesas(admin=Depends(require_admin)):
+        """Histórico de remesas (sin el XML, solo metadatos)."""
+        docs = await db.remesas.find(
+            {},
+            {"_id": 0, "xml_bytes": 0},  # nunca devolver binario en listado
+        ).sort("created_at", -1).to_list(500)
+        return docs
+
+    @router.get("/remesas/{remesa_id}")
+    async def get_remesa(remesa_id: str, admin=Depends(require_admin)):
+        """Detalle de una remesa (sin el XML)."""
+        doc = await db.remesas.find_one(
+            {"id": remesa_id},
+            {"_id": 0, "xml_bytes": 0},
+        )
+        if not doc:
+            raise HTTPException(404, "Remesa no encontrada")
+        return doc
+
+    @router.get("/remesas/{remesa_id}/xml")
+    async def download_remesa_xml(remesa_id: str, admin=Depends(require_admin)):
+        """Descarga el fichero XML de la remesa para subir a Kutxabank."""
+        doc = await db.remesas.find_one(
+            {"id": remesa_id},
+            {"_id": 0, "xml_bytes": 1, "message_id": 1},
+        )
+        if not doc:
+            raise HTTPException(404, "Remesa no encontrada")
+
+        filename = f"{doc['message_id']}.xml"
+        return Response(
+            content=bytes(doc["xml_bytes"]),
+            media_type="application/xml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # ============================ DEVOLUCIONES ============================
+
+    @router.post("/remesas/{remesa_id}/returns")
+    async def register_returns(
+        remesa_id: str,
+        payload: dict = Body(..., example={
+            "returns": [{"payment_id": "uuid", "reason": "AC04 cuenta cerrada"}],
+        }),
+        admin=Depends(require_admin),
+    ):
+        """Marca pagos como devueltos tras recibir fichero de devolución.
+
+        Body: { "returns": [{ "payment_id", "reason" }] }
+
+        Actualiza estado de la remesa según proporción de devoluciones.
+        """
+        remesa = await db.remesas.find_one({"id": remesa_id}, {"_id": 0, "payment_ids": 1, "n_txs": 1})
+        if not remesa:
+            raise HTTPException(404, "Remesa no encontrada")
+
+        items = payload.get("returns") or []
+        if not items:
+            raise HTTPException(400, "Lista 'returns' vacía")
+
+        updated, not_found = [], []
+        valid_ids = set(remesa.get("payment_ids", []))
+        now = datetime.now(timezone.utc)
+
+        for item in items:
+            pid = item.get("payment_id")
+            reason = (item.get("reason") or "")[:200]
+            if pid not in valid_ids:
+                not_found.append({"payment_id": pid, "reason": "not_in_remesa"})
+                continue
+            res = await db.payments.update_one(
+                {"id": pid, "status": "in_remesa"},
+                {"$set": {
+                    "status": "returned",
+                    "returned_at": now,
+                    "return_reason": reason,
+                }},
+            )
+            if res.matched_count:
+                updated.append(pid)
+            else:
+                not_found.append({"payment_id": pid, "reason": "already_processed"})
+
+        # Recalcular estado de la remesa
+        n_returned = await db.payments.count_documents(
+            {"remesa_id": remesa_id, "status": "returned"}
+        )
+        if n_returned == 0:
+            new_status = "generated"
+        elif n_returned >= remesa.get("n_txs", 0):
+            new_status = "closed"  # todas devueltas → remesa cerrada
+        else:
+            new_status = "partially_returned"
+
+        await db.remesas.update_one(
+            {"id": remesa_id}, {"$set": {"status": new_status}}
+        )
+
+        await _audit(admin.id, "remesa.returns", remesa_id, {
+            "updated": len(updated),
+            "not_found": len(not_found),
+            "new_status": new_status,
+        })
+
+        return {
+            "remesa_id": remesa_id,
+            "remesa_status": new_status,
+            "n_returned_total": n_returned,
+            "updated": updated,
+            "not_found": not_found,
+        }
+
+    @router.post("/payments/{payment_id}/retry")
+    async def retry_payment(payment_id: str, admin=Depends(require_admin)):
+        """Re-pone un pago devuelto como pending para incluirlo en próxima remesa."""
+        existing = await db.payments.find_one({"id": payment_id}, {"_id": 0, "status": 1})
+        if not existing:
+            raise HTTPException(404, "Pago no encontrado")
+        if existing.get("status") != "returned":
+            raise HTTPException(
+                409,
+                f"Solo pagos en estado 'returned' se pueden reintentar (actual: {existing.get('status')})",
+            )
+        await db.payments.update_one(
+            {"id": payment_id},
+            {"$set": {
+                "status": "pending",
+                "remesa_id": None,
+                "end_to_end_id": None,
+                "sequence_type": None,
+                "returned_at": None,
+                "return_reason": None,
+            }},
+        )
+        await _audit(admin.id, "payment.retry", payment_id)
+        return {"payment_id": payment_id, "status": "pending"}
 
     return router
