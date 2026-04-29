@@ -55,7 +55,7 @@ async def run_monthly_billing(db, month: str, actor_user_id: str) -> dict:
 
     swimmers = await db.users.find(
         {"role": "swimmer"},
-        {"_id": 0, "id": 1, "name": 1, "email": 1},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "monthly_fee": 1},
     ).to_list(5000)
 
     for s in swimmers:
@@ -71,10 +71,14 @@ async def run_monthly_billing(db, month: str, actor_user_id: str) -> dict:
             missing_mandate.append(brief)
             continue
 
+        # Cuota personalizada del nadador, o tarifa por defecto si no tiene
+        fee_override = s.get("monthly_fee")
+        amount = round(float(fee_override), 2) if fee_override is not None else config.MONTHLY_FEE_EUR
+
         doc = {
             "id": str(uuid.uuid4()),
             "user_id": uid,
-            "amount": config.MONTHLY_FEE_EUR,
+            "amount": amount,
             "currency": config.CURRENCY,
             "concept": concept,
             "due_date": due_dt,
@@ -89,7 +93,7 @@ async def run_monthly_billing(db, month: str, actor_user_id: str) -> dict:
         }
         try:
             await db.payments.insert_one(doc)
-            created.append({**brief, "payment_id": doc["id"]})
+            created.append({**brief, "payment_id": doc["id"], "amount": amount})
         except Exception as e:
             # El índice único (user_id, billing_period) dispara E11000 si ya
             # se facturó este mes a este usuario → lo saltamos.
@@ -115,7 +119,8 @@ async def run_monthly_billing(db, month: str, actor_user_id: str) -> dict:
     return {
         "month": month,
         "due_date": due_date.isoformat(),
-        "amount_each": config.MONTHLY_FEE_EUR,
+        "amount_each": config.MONTHLY_FEE_EUR,  # tarifa por defecto (los nadadores con cuota propia se aplican individualmente)
+        "default_fee": config.MONTHLY_FEE_EUR,
         "total_swimmers": len(swimmers),
         "created": len(created),
         "already_billed": len(already_billed),

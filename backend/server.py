@@ -60,6 +60,7 @@ class UserBase(BaseModel):
     birth_date: Optional[datetime] = None
     gender: Optional[str] = None
     avatar_url: Optional[str] = None
+    monthly_fee: Optional[float] = None  # cuota mensual personalizada; None = usar tarifa por defecto
 
 
 class UserCreate(UserBase):
@@ -415,6 +416,13 @@ async def update_user(user_id: str, user_data: UserBase, current_user: User = De
         update_doc["avatar_url"] = user_data.avatar_url
     else:
         update_doc["avatar_url"] = existing_user.get("avatar_url")
+
+    if "monthly_fee" in user_data.model_dump(exclude_unset=True):
+        if user_data.monthly_fee is not None and user_data.monthly_fee < 0:
+            raise HTTPException(status_code=400, detail="La cuota mensual no puede ser negativa")
+        update_doc["monthly_fee"] = (
+            round(float(user_data.monthly_fee), 2) if user_data.monthly_fee is not None else None
+        )
 
 
     result = await db.users.update_one({"id": user_id}, {"$set": update_doc})
