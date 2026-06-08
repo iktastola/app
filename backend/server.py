@@ -188,8 +188,8 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def check_minimum_time(swimmer_id, category, distance, style, time_seconds, time_date=None):
-    print(f"DEBUG: Checking minima for {category} - {style} {distance}m - Time: {time_seconds}")
+async def check_minimum_time(swimmer_id, category, distance, style, time_seconds, piscina_metros=25, time_date=None):
+    print(f"DEBUG: Checking minima for {category} - {style} {distance}m ({piscina_metros}m pool) - Time: {time_seconds}")
 
     # Marcas con un tiempo superior a 14 meses no son consideradas mínima
     if time_date is not None:
@@ -204,11 +204,12 @@ async def check_minimum_time(swimmer_id, category, distance, style, time_seconds
 
     doc = await db.EHMinimas.find_one({
         "prueba": style,
-        "distancia": str(distance)
+        "distancia": str(distance),
+        "piscina_metros": piscina_metros
     })
 
     if not doc:
-        print("DEBUG: No DOC found in EHMinimas")
+        print(f"DEBUG: No DOC found in EHMinimas for pool {piscina_metros}")
         return False
 
     print(f"DEBUG: Found DOC: {doc.get('_id')}")
@@ -507,6 +508,7 @@ async def create_swim_time(time_data: SwimTimeCreate, current_user: User = Depen
             distance=time_data.distance,
             style=time_data.style,
             time_seconds=time_data.time_seconds,
+            piscina_metros=time_data.piscina_metros,
             time_date=time_data.date
         )
         is_minimum_bizkaia = await check_minimum_time_bizkaia(
@@ -603,6 +605,7 @@ async def update_swim_time(
             distance=time_data.distance,
             style=time_data.style,
             time_seconds=time_data.time_seconds,
+            piscina_metros=time_data.piscina_metros,
             time_date=time_data.date
         )
         is_minimum_bizkaia = await check_minimum_time_bizkaia(
@@ -760,6 +763,7 @@ async def audit_database(current_user: User = Depends(get_current_user)):
                 distance=t["distance"],
                 style=t["style"],
                 time_seconds=t["time_seconds"],
+                piscina_metros=t.get("piscina_metros", 25),
                 time_date=t.get("date")
             )
             
@@ -809,6 +813,69 @@ async def audit_database(current_user: User = Depends(get_current_user)):
         stats["swimmers_processed"] += 1
 
     return {"status": "success", "stats": stats}
+
+
+# ================== IMPORT MÍNIMAS ==================
+
+ALLOWED_MINIMAS_COLLECTIONS = {"BizkaiaMinimas", "EHMinimas"}
+
+
+class MinimasImport(BaseModel):
+    collection: str
+    documentos: List[dict]
+
+
+@api_router.post("/admin/minimas/import")
+async def import_minimas(payload: MinimasImport, current_user: User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores pueden importar mínimas")
+
+    if payload.collection not in ALLOWED_MINIMAS_COLLECTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Colección no válida. Usa una de: {sorted(ALLOWED_MINIMAS_COLLECTIONS)}"
+        )
+
+    coll = db[payload.collection]
+    is_bizkaia = payload.collection == "BizkaiaMinimas"
+
+    inserted = 0
+    updated = 0
+    errors = []
+
+    for i, doc in enumerate(payload.documentos):
+        doc = dict(doc)
+        doc.pop("_id", None)
+
+        prueba = doc.get("prueba")
+        distancia = doc.get("distancia")
+        if prueba is None or distancia is None:
+            errors.append(f"Documento {i}: faltan 'prueba' o 'distancia'")
+            continue
+
+        doc["distancia"] = str(distancia)
+        filtro = {"prueba": prueba, "distancia": str(distancia)}
+
+        # Bizkaia diferencia por tipo de piscina; EH no
+        if is_bizkaia:
+            piscina = int(doc.get("piscina_metros", 25))
+            doc["piscina_metros"] = piscina
+            filtro["piscina_metros"] = piscina
+
+        result = await coll.update_one(filtro, {"$set": doc}, upsert=True)
+        if result.upserted_id is not None:
+            inserted += 1
+        else:
+            updated += 1
+
+    return {
+        "status": "success",
+        "collection": payload.collection,
+        "inserted": inserted,
+        "updated": updated,
+        "errors": errors,
+    }
+
 
 # ================== LOCKER ROUTES ==================
 
