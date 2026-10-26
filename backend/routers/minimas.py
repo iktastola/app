@@ -59,7 +59,7 @@ async def get_minimas(
         )
 
     query = {}
-    if collection == "BizkaiaMinimas":
+    if piscina_metros is not None:
         query["piscina_metros"] = piscina_metros
 
     documentos = await db[collection].find(query, {"_id": 0}).to_list(1000)
